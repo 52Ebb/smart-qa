@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  # ========== 后端服务 ==========
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: doc-qa-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化文档和向量数据库
+      - backend_data:/app/data
+      - chroma_data:/app/chroma_db
+      # 首次启动时下载的模型缓存
+      - model_cache:/root/.cache/huggingface
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    restart: unless-stopped
+
+  # ========== 前端服务 ==========
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: doc-qa-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend_data:
+  chroma_data:
+  model_cache:
