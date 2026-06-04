@@ -20,10 +20,18 @@
 
 ### 1. 配置环境变量
 
+在项目根目录创建 `.env` 文件（不要直接写在命令行中，避免 Key 泄露到 shell 历史）：
+
 ```bash
-cp .env.example .env
-# 编辑 .env，填入你的 DEEPSEEK_API_KEY
+# 方式一：用编辑器直接创建文件
+# 在项目根目录新建 .env，写入以下内容：
+DEEPSEEK_API_KEY=sk-你的key
+
+# 方式二：用命令创建（注意：Key 不会记录到 shell 历史之外的任何地方）
+echo "DEEPSEEK_API_KEY=sk-你的key" > .env
 ```
+
+> **安全警告**: `.env` 文件包含你的 API Key，已加入 `.gitignore`，**严禁提交到 Git**。每次提交前请确认 `git status` 中不包含 `.env`。
 
 ### 2. 启动服务
 
@@ -37,6 +45,24 @@ docker compose up -d
 
 - 前端: http://localhost:3000
 - 后端 API 文档: http://localhost:8000/docs
+
+## 提交前安全检查
+
+本项目 `.gitignore` 已配置忽略以下敏感文件，提交前务必确认：
+
+```bash
+# 检查是否有敏感文件被意外跟踪
+git status
+
+# 如果 .env 已被跟踪，从 Git 中移除（保留本地文件）
+git rm --cached .env
+```
+
+被忽略的敏感文件类型：
+- `.env` — 环境变量（含 API Key）
+- `chroma_db/` — ChromaDB 持久化数据
+- `backend/data/*.pdf` `.docx` `.doc` — 上传的文档
+- `model_cache/` — 本地模型缓存
 
 ## API 接口
 
