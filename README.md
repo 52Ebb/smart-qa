@@ -20,16 +20,14 @@
 
 ### 1. 配置环境变量
 
-在项目根目录创建 `.env` 文件（不要直接写在命令行中，避免 Key 泄露到 shell 历史）：
+复制 `.env.example` 为 `.env` 并填入你的 DeepSeek API Key（不要直接写在命令行中，避免 Key 泄露到 shell 历史）：
 
 ```bash
-# 方式一：用编辑器直接创建文件
-# 在项目根目录新建 .env，写入以下内容：
-DEEPSEEK_API_KEY=sk-你的key
-
-# 方式二：用命令创建（注意：Key 不会记录到 shell 历史之外的任何地方）
-echo "DEEPSEEK_API_KEY=sk-你的key" > .env
+cp .env.example .env
+# 然后编辑 .env，把 DEEPSEEK_API_KEY 改为你本人的真实 Key
 ```
+
+> 项目根目录已提供 `.env.example` 作为占位模板，`.env` 已被 `.gitignore` 忽略，**严禁提交**。
 
 > **安全警告**: `.env` 文件包含你的 API Key，已加入 `.gitignore`，**严禁提交到 Git**。每次提交前请确认 `git status` 中不包含 `.env`。
 
@@ -85,13 +83,18 @@ smart-doc-qa/
 │   │   ├── document/            # 文档解析与分块
 │   │   ├── retrieval/           # 检索模块（向量+BM25+Rerank）
 │   │   └── agent/               # LangGraph Agent
-│   ├── data/                    # 上传文档存放
+│   ├── data/                    # 上传文档存放（git 忽略）
+│   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
 │   ├── src/
 │   │   ├── app/                 # Next.js 路由
 │   │   ├── components/          # React 组件
 │   │   └── lib/                 # API 调用封装
+│   ├── package.json
 │   └── Dockerfile
-└── docker-compose.yml
+├── docs/                        # 样例/示例文档（HR 面试题库等）
+├── .env.example                 # 环境变量模板
+├── docker-compose.yml
+└── README.md
 ```

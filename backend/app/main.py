@@ -289,11 +289,11 @@ async def chat_stream(request: ChatRequest):
 @app.delete("/api/index")
 async def clear_index():
     """清空所有文档索引"""
+    global vector_store, bm25_retriever
     try:
         # 清空 ChromaDB collection
         vector_store.delete_collection()
         # 重新创建 collection
-        global vector_store, bm25_retriever
         vector_store = get_vector_store()
         bm25_retriever = BM25Retriever()
         init_tools(vector_store, bm25_retriever)

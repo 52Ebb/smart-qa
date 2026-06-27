@@ -12,8 +12,8 @@ python-docx>=1.1.0
 
 # AI / LLM
 langgraph>=0.2.0
-langchain-openai>=0.2.0  # DeepSeek 兼容 OpenAI SDK
-openai>=1.50.0  # 兼容 DeepSeek API
+langchain-openai>=0.2.0
+openai>=1.50.0
 sentence-transformers>=3.1.0
 
 # 向量数据库
@@ -25,4 +25,4 @@ rank-bm25>=0.2.2
 
 # 工具
 tiktoken>=0.7.0
-jieba>=0.42.1  # 中文分词
+jieba>=0.42.1
