@@ -17,6 +17,12 @@ class BM25Retriever:
 
     def index(self, texts: List[str]) -> None:
         """构建 BM25 索引"""
+        if not texts:
+            # 空语料保护：BM25Okapi 在空集上会导致 avgdl=0，后续 get_scores 触发除零错误
+            self._corpus = []
+            self._tokenized_corpus = []
+            self._bm25 = None
+            return
         self._corpus = texts
         self._tokenized_corpus = [list(jieba.cut(text)) for text in texts]
         self._bm25 = BM25Okapi(self._tokenized_corpus)

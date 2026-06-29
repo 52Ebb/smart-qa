@@ -38,3 +38,7 @@ RERANK_TOP_K = 5  # 重排序后返回数
 
 # Agent 参数
 MAX_AGENT_ITERATIONS = 5  # Agent 最大迭代次数
+
+# 上传限制
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB，单文件上传大小上限
+SUPPORTED_FILE_TYPES = (".pdf", ".docx")  # 支持的文件格式（.doc 二进制格式不支持）

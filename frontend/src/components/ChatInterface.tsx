@@ -13,6 +13,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 interface Message {
   role: "user" | "assistant" | "system";
   content: string;
+  id?: string;
 }
 
 /**
@@ -25,14 +26,23 @@ export function ChatInterface() {
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState("");
+  const [statusText, setStatusText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef<string>("");
+  const currentAssistantIdRef = useRef<string>("");
 
   // 初始化时查询索引状态
   useEffect(() => {
     refreshIndexStatus();
+  }, []);
+
+  // 组件卸载时中止在途流，避免内存泄漏与悬挂状态更新
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
   }, []);
 
   // 自动滚到底部
@@ -58,8 +68,9 @@ export function ChatInterface() {
         `上传成功！文件 "${result.file_name}" 已处理为 ${result.chunk_count} 个文本块`
       );
       await refreshIndexStatus();
-    } catch (err: any) {
-      setUploadMessage(`上传失败: ${err.message}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setUploadMessage(`上传失败: ${msg}`);
     } finally {
       setIsUploading(false);
     }
@@ -73,69 +84,94 @@ export function ChatInterface() {
       return;
     }
 
-    // 添加用户消息
-    setMessages((prev) => [...prev, { role: "user", content: query }]);
     setInput("");
     setIsStreaming(true);
+    setStatusText("");
 
-    // 创建一个占位的 assistant 消息，用于流式更新
-    const assistantMsgIndex = messages.length + 1;
+    // 为本次 assistant 回答生成稳定唯一 ID，避免用数组索引追踪（防止 stale closure）
+    const assistantId = crypto.randomUUID().slice(0, 8);
+    currentAssistantIdRef.current = assistantId;
+
     setMessages((prev) => [
       ...prev,
-      { role: "assistant", content: "" },
+      { role: "user", content: query },
+      { role: "assistant", content: "", id: assistantId },
     ]);
 
     abortRef.current = askQuestionStream(
       { query, conversation_id: conversationIdRef.current },
-      // onToken — 逐字追加
-      (token) => {
-        setMessages((prev) => {
-          const updated = [...prev];
-          if (updated[assistantMsgIndex]) {
-            updated[assistantMsgIndex] = {
-              ...updated[assistantMsgIndex],
-              content: updated[assistantMsgIndex].content + token,
-            };
-          }
-          return updated;
-        });
-      },
-      // onDone
-      () => {
-        setIsStreaming(false);
-        abortRef.current = null;
-      },
-      // onError
-      (error) => {
-        setMessages((prev) => {
-          const updated = [...prev];
-          if (updated[assistantMsgIndex]) {
-            updated[assistantMsgIndex] = {
-              ...updated[assistantMsgIndex],
-              content: `错误: ${error}`,
-            };
-          }
-          return updated;
-        });
-        setIsStreaming(false);
-        abortRef.current = null;
+      {
+        // onToken — 按 ID 追加，不受 messages 其他变更影响
+        onToken: (token) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: m.content + token }
+                : m
+            )
+          );
+        },
+        onDone: () => {
+          setIsStreaming(false);
+          abortRef.current = null;
+          currentAssistantIdRef.current = "";
+          setStatusText("");
+        },
+        onError: (error) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: `错误: ${error}` }
+                : m
+            )
+          );
+          setIsStreaming(false);
+          abortRef.current = null;
+          currentAssistantIdRef.current = "";
+          setStatusText("");
+        },
+        // 接收后端回传的 conversation_id，绑定到后续多轮对话
+        onConversationId: (id) => {
+          if (id) conversationIdRef.current = id;
+        },
+        onStatus: (status) => {
+          setStatusText(status);
+        },
       }
     );
   }
 
   function handleStop() {
     abortRef.current?.abort();
+    abortRef.current = null;
     setIsStreaming(false);
+    setStatusText("");
+    // 清理尚未收到任何 token 的空 assistant 占位消息，避免 "思考中..." 卡住
+    const aid = currentAssistantIdRef.current;
+    if (aid) {
+      setMessages((prev) =>
+        prev.filter((m) => !(m.id === aid && m.content === ""))
+      );
+    }
+    currentAssistantIdRef.current = "";
   }
 
   async function handleClearIndex() {
+    // 先中止在途流，避免清空消息后 token 写入到已不存在的索引引发状态错乱
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsStreaming(false);
+    currentAssistantIdRef.current = "";
     try {
       await clearIndex();
       setMessages([]);
+      conversationIdRef.current = "";
+      setStatusText("");
       setUploadMessage("索引已清空");
       await refreshIndexStatus();
-    } catch (err: any) {
-      setUploadMessage(`清空失败: ${err.message}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setUploadMessage(`清空失败: ${msg}`);
     }
   }
 
@@ -152,7 +188,7 @@ export function ChatInterface() {
       <header style={styles.header}>
         <h1 style={styles.title}>智能文档问答系统</h1>
         <div style={styles.headerRight}>
-          <span style={styles.statusBadge(indexStatus?.indexed)}>
+          <span style={statusBadgeStyle(indexStatus?.indexed)}>
             {indexStatus === null
               ? "检查连接中..."
               : indexStatus.indexed
@@ -181,7 +217,7 @@ export function ChatInterface() {
 
         {messages.map((msg, i) => (
           <div
-            key={i}
+            key={msg.id ?? i}
             style={{
               ...styles.messageRow,
               justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
@@ -195,7 +231,9 @@ export function ChatInterface() {
               }}
             >
               {msg.role === "assistant" ? (
-                <MarkdownRenderer content={msg.content || "思考中..."} />
+                <MarkdownRenderer
+                  content={msg.content || (isStreaming ? statusText || "思考中..." : "（已停止）")}
+                />
               ) : (
                 <p style={styles.messageText}>{msg.content}</p>
               )}
@@ -218,7 +256,7 @@ export function ChatInterface() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.docx,.doc"
+            accept=".pdf,.docx"
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) handleUpload(file);
@@ -274,6 +312,17 @@ export function ChatInterface() {
 
 // ==================== 内联样式 ====================
 
+/** 状态徽章样式（函数返回 CSSProperties，避免混入 styles 对象导致类型错误） */
+function statusBadgeStyle(indexed?: boolean): React.CSSProperties {
+  return {
+    fontSize: "12px",
+    padding: "4px 12px",
+    borderRadius: "12px",
+    background: indexed ? "#dcfce7" : "#fef3c7",
+    color: indexed ? "#166534" : "#92400e",
+  };
+}
+
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: "flex",
@@ -302,13 +351,6 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "12px",
   },
-  statusBadge: (indexed?: boolean) => ({
-    fontSize: "12px",
-    padding: "4px 12px",
-    borderRadius: "12px",
-    background: indexed ? "#dcfce7" : "#fef3c7",
-    color: indexed ? "#166534" : "#92400e",
-  }),
   clearBtn: {
     fontSize: "12px",
     padding: "4px 12px",

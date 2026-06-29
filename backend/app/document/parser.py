@@ -25,7 +25,8 @@ def parse_file(file_path: str) -> List[Document]:
     ext = Path(file_path).suffix.lower()
     if ext == ".pdf":
         return parse_pdf(file_path)
-    elif ext in (".docx", ".doc"):
+    elif ext == ".docx":
+        # 注意: 仅支持 OOXML(.docx)；旧版二进制 .doc 格式无法由 docx2txt 解析
         return parse_docx(file_path)
     else:
-        raise ValueError(f"不支持的文件格式: {ext}，仅支持 PDF 和 Word 文档")
+        raise ValueError(f"不支持的文件格式: {ext}，仅支持 PDF 和 Word(.docx) 文档")

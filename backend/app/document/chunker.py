@@ -30,10 +30,17 @@ _text_splitter = RecursiveCharacterTextSplitter(
 )
 
 
-def chunk_documents(documents: List[Document]) -> List[Document]:
-    """将文档列表切分为更小的文本块"""
+def chunk_documents(documents: List[Document], file_id: str = "") -> List[Document]:
+    """
+    将文档列表切分为更小的文本块。
+    参数:
+        documents: 待分块的文档列表
+        file_id: 上传文件标识，用于生成全局唯一的 chunk_id，避免不同文档间的 ID 冲突
+    """
     chunks = _text_splitter.split_documents(documents)
-    # 为每个 chunk 的 metadata 添加 chunk_id，便于后续引用追踪
+    # 为每个 chunk 的 metadata 添加全局唯一的 chunk_id
+    # 格式: {file_id}_{序号}，确保多次上传不会覆盖既有向量
+    prefix = f"{file_id}_" if file_id else ""
     for i, chunk in enumerate(chunks):
-        chunk.metadata["chunk_id"] = str(i)
+        chunk.metadata["chunk_id"] = f"{prefix}{i}"
     return chunks

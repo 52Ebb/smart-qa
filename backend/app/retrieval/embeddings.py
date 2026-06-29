@@ -29,13 +29,10 @@ class BGEZhEmbeddings(Embeddings):
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         model = _get_model()
-        # BGE 模型建议对文档添加 "为这个句子生成表示以用于检索相关文章：" 前缀
-        # 参考: https://huggingface.co/BAAI/bge-small-zh-v1.5
-        texts_with_prefix = [
-            f"为这个句子生成表示以用于检索相关文章：{t}" for t in texts
-        ]
+        # BGE bge-small-zh-v1.5 是非对称检索模型，"为这个句子生成表示以用于检索相关文章：" 前缀
+        # 仅应添加到 query 侧（embed_query），文档侧不加前缀，否则会偏离模型训练分布导致检索质量下降
         embeddings = model.encode(
-            texts_with_prefix,
+            texts,
             normalize_embeddings=True,  # 归一化，便于余弦相似度计算
             show_progress_bar=False,
         )
@@ -43,7 +40,7 @@ class BGEZhEmbeddings(Embeddings):
 
     def embed_query(self, text: str) -> List[float]:
         model = _get_model()
-        # 查询文本使用不同的前缀
+        # 查询侧添加 BGE 指定的检索前缀
         query_with_prefix = f"为这个句子生成表示以用于检索相关文章：{text}"
         embedding = model.encode(
             query_with_prefix,

@@ -1,10 +1,16 @@
 """
-LangGraph ReAct Agent — 条件边路由，支持多轮对话
+LangGraph ReAct Agent — 条件边路由，支持多轮对话与真正的工具派发
+使用 langgraph.prebuilt.ToolNode 正确解析 LLM 的 tool_calls 并执行回边循环。
 """
-import json
-from typing import Literal
+from typing import List, Literal
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -51,36 +57,34 @@ def _build_llm() -> ChatOpenAI:
     )
 
 
+def history_to_messages(history: List[dict]) -> List[BaseMessage]:
+    """将外部存储的对话历史（dict 形式）转换为 LangChain 消息对象"""
+    msgs: List[BaseMessage] = []
+    for m in history:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "user":
+            msgs.append(HumanMessage(content=content))
+        elif role == "assistant":
+            msgs.append(AIMessage(content=content))
+    return msgs
+
+
 def agent_node(state: AgentState) -> dict:
     """
-    Agent 决策节点 — 调用 LLM 决定是调用工具还是直接回答
+    Agent 决策节点 — 调用 LLM 决定是调用工具还是直接回答。
+    保留原生 AIMessage（含 tool_calls 元信息），供 ToolNode 正确派发。
     """
     llm = _build_llm()
     llm_with_tools = llm.bind_tools(AGENT_TOOLS)
 
-    # 构建消息列表
-    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+    messages: List[BaseMessage] = [SystemMessage(content=SYSTEM_PROMPT)]
+    messages.extend(state.get("messages", []))
 
-    # 添加历史消息
-    for msg in state.get("messages", []):
-        if msg.get("role") == "user":
-            messages.append(HumanMessage(content=msg["content"]))
-        elif msg.get("role") == "assistant":
-            messages.append(AIMessage(content=msg["content"]))
-
-    # 添加当前查询
-    messages.append(HumanMessage(content=state["query"]))
-
-    # 调用 LLM
     response = llm_with_tools.invoke(messages)
 
-    # 检查是否有工具调用
-    has_tool_calls = hasattr(response, "tool_calls") and response.tool_calls
-
     return {
-        "messages": [
-            {"role": "assistant", "content": response.content or ""},
-        ],
+        "messages": [response],  # 原生 AIMessage，保留 tool_calls
         "iteration_count": state.get("iteration_count", 0) + 1,
     }
 
@@ -88,120 +92,102 @@ def agent_node(state: AgentState) -> dict:
 def should_continue(state: AgentState) -> Literal["tools", "finalize"]:
     """
     条件边路由:
-    - 如果最后一条消息包含 tool_calls → 执行工具
-    - 如果超过最大迭代次数 → 强制结束
-    - 否则 → 直接生成最终回答
+    - 超过最大迭代次数 → 强制结束
+    - 最后一条 AIMessage 含 tool_calls → 执行工具
+    - 否则 → 结束并生成最终回答
     """
     if state.get("iteration_count", 0) >= MAX_AGENT_ITERATIONS:
         return "finalize"
 
-    # 检查最后一条 assistant 消息是否有 tool_calls
     messages = state.get("messages", [])
     if messages:
-        last_msg = messages[-1]
-        # 如果 LLM 请求了工具调用，且有工具调用的内容
-        # LangGraph 的 tool_calls 信息在 AIMessage 的 tool_calls 属性
-        # 这里检查 response 中是否有 tool_calls
-        # 简化处理: 如果消息内容为空，可能有 tool_calls
-        if not last_msg.get("content"):
+        last = messages[-1]
+        if isinstance(last, AIMessage) and last.tool_calls:
             return "tools"
-
     return "finalize"
-
-
-def tools_node(state: AgentState) -> dict:
-    """
-    工具执行节点 — 执行 Agent 请求的工具调用
-    由于 LangGraph ToolNode 需要原生消息格式，这里使用简化版工具路由
-    """
-    messages = state.get("messages", [])
-    if not messages:
-        return {"messages": []}
-
-    last_msg = messages[-1]
-    query = state.get("query", "")
-
-    # 根据消息内容判断需要调用哪个工具
-    # 实际项目中应解析 tool_calls，这里做简化处理
-    # 尝试用 search_documents 检索
-    result = search_documents.invoke({"query": query})
-
-    return {
-        "messages": [
-            {"role": "tool", "content": str(result)},
-        ],
-        "documents": [str(result)],
-        "query": query,
-    }
 
 
 def finalize_node(state: AgentState) -> dict:
     """
-    生成最终回答 — 基于检索到的文档上下文
+    生成最终回答:
+    - 正常情况: ReAct 循环结束时最后一条 AIMessage 的内容即 LLM 基于工具结果给出的回答，直接提取
+    - 兜底情况: 超过迭代上限仍存在未处理工具调用时，基于已收集的工具结果再调一次 LLM 生成回答
+    同时收集所有 ToolMessage 内容作为 sources 返回。
     """
-    llm = _build_llm()
+    messages = state.get("messages", [])
 
-    # 构建最终回答的上下文
-    documents = state.get("documents", [])
-    doc_context = "\n\n---\n\n".join(documents) if documents else "（未检索到相关文档）"
+    # 收集工具返回的文档内容作为来源
+    documents: List[str] = []
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            documents.append(m.content if isinstance(m.content, str) else str(m.content))
 
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=f"""基于以下文档内容回答用户问题。
+    # 取最后一条 AIMessage 的文本作为最终回答
+    last_ai_content = ""
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            last_ai_content = (m.content or "")
+            break
+
+    if last_ai_content:
+        final_answer = last_ai_content
+    else:
+        # 兜底：迭代上限耗尽且无直接回答，基于已有工具上下文强制生成
+        llm = _build_llm()
+        doc_context = "\n\n---\n\n".join(documents) if documents else "（未检索到相关文档）"
+        response = llm.invoke([
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=f"""基于以下文档内容回答用户问题。
 
 ## 检索到的文档内容
 {doc_context}
 
 ## 用户问题
-{state['query']}
+{state.get('query', '')}
 
 ## 要求
 - 如果文档中有相关信息，请准确回答并注明引用来源
 - 如果文档中没有相关信息，请明确告知用户
-- 如果文档信息不完整，可以说明局限性
 - 使用中文回答"""),
-    ]
+        ])
+        final_answer = response.content if hasattr(response, "content") else str(response)
 
-    response = llm.invoke(messages)
-    content = response.content if hasattr(response, "content") else str(response)
-
-    return {
-        "final_answer": content,
-        "messages": [
-            {"role": "assistant", "content": content},
-        ],
-    }
+    return {"final_answer": final_answer, "documents": documents}
 
 
-def build_agent_graph() -> StateGraph:
+def build_agent_graph():
     """
     构建 LangGraph ReAct Agent 图
-    流程: agent → (tools | finalize) → END
+    流程: agent → (tools | finalize) → END，tools 执行后回到 agent 形成多轮推理循环
     """
     workflow = StateGraph(AgentState)
 
-    # 添加节点
     workflow.add_node("agent", agent_node)
-    workflow.add_node("tools", tools_node)
+    workflow.add_node("tools", ToolNode(AGENT_TOOLS))
     workflow.add_node("finalize", finalize_node)
 
-    # 设置入口点
     workflow.set_entry_point("agent")
 
-    # 添加条件边: agent → tools 或 finalize
     workflow.add_conditional_edges(
         "agent",
         should_continue,
-        {
-            "tools": "tools",
-            "finalize": "finalize",
-        },
+        {"tools": "tools", "finalize": "finalize"},
     )
 
-    # tools 节点执行后 → finalize（也可以回到 agent 继续思考）
-    workflow.add_edge("tools", "finalize")
-
-    # finalize → END
+    # 工具执行后回到 agent 节点继续推理（真正的 ReAct 循环）
+    workflow.add_edge("tools", "agent")
     workflow.add_edge("finalize", END)
 
     return workflow.compile()
+
+
+# 编译后的图单例，避免每请求重复编译
+_compiled_graph = None
+
+
+def get_agent_graph():
+    """获取编译好的 Agent 图单例"""
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = build_agent_graph()
+    return _compiled_graph
